@@ -1,0 +1,16 @@
+/* admin-styles.css */
+.button-primary[name="sync"] {
+    background-color: #4caf50; /* Green background */
+    color: white; /* White text */
+    border-color: #4caf50; /* Green border */
+    font-weight: bold; /* Bold text */
+    padding: 10px 20px; /* Add padding */
+    border-radius: 5px; /* Rounded corners */
+    transition: background-color 0.3s; /* Smooth hover effect */
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.button-primary[name="sync"]:hover {
+    background-color: #45a049; /* Darker green on hover */
+}
