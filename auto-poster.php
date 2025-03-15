@@ -32,9 +32,37 @@ add_action('admin_menu', function () {
         'auction-sync',
         function () {
             echo '<form method="post"><button name="sync" class="button-primary">Sync & Create/Update Blog Posts Now</button></form>';
+
             if (isset($_POST['sync'])) {
-                sync_auction_data_from_google_sheet();
-                echo '<div class="updated"><p>Sync completed!</p></div>';
+                $sync_results = sync_auction_data_from_google_sheet();
+
+                echo '<div class="updated"><p><strong>Sync completed!</strong></p>';
+
+                if (!empty($sync_results['error'])) {
+                    echo '<p>Error: ' . esc_html($sync_results['error']) . '</p>';
+                } else {
+                    if (!empty($sync_results['new_posts'])) {
+                        echo '<p>✅ New Posts Created:</p><ul>';
+                        foreach ($sync_results['new_posts'] as $title) {
+                            echo '<li>' . esc_html($title) . '</li>';
+                        }
+                        echo '</ul>';
+                    }
+
+                    if (!empty($sync_results['review_posts'])) {
+                        echo '<p>⚠️ Posts Flagged for Review:</p><ul>';
+                        foreach ($sync_results['review_posts'] as $title) {
+                            echo '<li>' . esc_html($title) . '</li>';
+                        }
+                        echo '</ul>';
+                    }
+
+                    if (empty($sync_results['new_posts']) && empty($sync_results['review_posts'])) {
+                        echo '<p>No changes detected.</p>';
+                    }
+                }
+
+                echo '</div>';
             }
         },
         'dashicons-networking'
@@ -43,51 +71,43 @@ add_action('admin_menu', function () {
 
 // Main Sync Function
 function sync_auction_data_from_google_sheet() {
-    $csv_url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSF_mV69DPo8Dl9JMjOm8w2WfTDRLIwHdDhymxQxHiJEYEZJI058qEOApbz9zvLB9NH7ReRwmXD4L1Z/pub?output=csv';
+    $results = [
+        'new_posts'     => [],
+        'review_posts'  => [],
+    ];
 
-    error_log("Fetching CSV from Google Sheets: {$csv_url}");
+    $csv_url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSF_mV69DPo8Dl9JMjOm8w2WfTDRLIwHdDhymxQxHiJEYEZJI058qEOApbz9zvLB9NH7ReRwmXD4L1Z/pub?output=csv';
 
     $csv = file_get_contents($csv_url);
 
     if (!$csv) {
-        error_log("Failed to fetch CSV from Google Sheets.");
-        return;
+        return ['error' => 'Failed to fetch CSV from Google Sheets.'];
     }
 
     $rows = array_map("str_getcsv", explode("\n", $csv));
 
     if (empty($rows) || count($rows) < 2) {
-        error_log("No data found in the Google Sheet.");
-        return;
+        return ['error' => 'No data found in the Google Sheet.'];
     }
 
     $header = array_map('trim', array_shift($rows));
 
     foreach ($rows as $row_index => $row) {
         if (count($row) !== count($header)) {
-            error_log("Skipping incomplete row at index {$row_index}");
             continue;
         }
 
         $data = array_combine($header, $row);
 
         $post_title_raw = $data['Address'] ?? '';
-
         if (empty($post_title_raw)) {
-            error_log("Skipping row {$row_index} due to missing Address.");
             continue;
         }
 
         $post_title = trim(sanitize_text_field($post_title_raw));
-
-        /**
-         * ✅ Generate a unique identifier for the row.
-         * You can improve this by adding another field if needed.
-         * Example: Address + Zip + Date = more uniqueness
-         */
         $unique_id = sanitize_title($post_title . '-' . ($data['Zip'] ?? '') . '-' . ($data['Date'] ?? ''));
 
-        // 🔎 Search for existing post by `auction_sheet_id`
+        // Check for existing post by meta key
         $query = new WP_Query([
             'post_type'      => 'post',
             'post_status'    => 'publish',
@@ -100,9 +120,20 @@ function sync_auction_data_from_google_sheet() {
         $post_id = !empty($query->posts) ? $query->posts[0] : null;
         wp_reset_postdata();
 
-        /**
-         * ✅ Build the post content (unchanged)
-         */
+        if ($post_id) {
+            // Compare status for review flag
+            $current_status = get_post_meta($post_id, 'auction_status', true);
+            $sheet_status   = $data['Status'] ?? '';
+
+            if ($current_status !== $sheet_status) {
+                update_post_meta($post_id, 'needs_sync_review', true);
+                $results['review_posts'][] = $post_title;
+            }
+
+            continue; // Don't update post content automatically
+        }
+
+        // Build the post content for a new post
         $post_content = '<h2>Auction Details</h2>';
         $post_content .= '<ul>';
         $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
@@ -121,31 +152,7 @@ function sync_auction_data_from_google_sheet() {
             $post_content .= '<p><img src="' . esc_url($data['Image']) . '" alt="Auction Image" /></p>';
         }
 
-        /**
-         * ✅ If post already exists
-         */
-        if ($post_id) {
-            error_log("Found existing post (ID: {$post_id}) for unique_id: {$unique_id}");
-
-            // Check if data has changed (example compares Status, expand as needed)
-            $current_status = get_post_meta($post_id, 'auction_status', true);
-            $sheet_status   = $data['Status'] ?? '';
-
-            if ($current_status !== $sheet_status) {
-                // ✅ Flag for review, do NOT overwrite
-                update_post_meta($post_id, 'needs_sync_review', true);
-                error_log("Post {$post_id} flagged for review: sheet status '{$sheet_status}' differs from current '{$current_status}'");
-            } else {
-                error_log("Post {$post_id} is already up-to-date.");
-            }
-
-            // ✅ Continue to next row without modifying the post content/meta
-            continue;
-        }
-
-        /**
-         * ✅ If post doesn't exist, create a new post
-         */
+        // Insert new post
         $new_post_id = wp_insert_post([
             'post_title'   => $post_title,
             'post_content' => $post_content,
@@ -153,31 +160,13 @@ function sync_auction_data_from_google_sheet() {
             'post_type'    => 'post',
         ]);
 
-        if (!$new_post_id) {
-            error_log("Failed to create post for row {$row_index} ({$post_title})");
-            continue;
+        if ($new_post_id) {
+            update_post_meta($new_post_id, 'auction_sheet_id', $unique_id);
+            update_post_meta($new_post_id, 'auction_status', $data['Status'] ?? '');
+            update_post_meta($new_post_id, 'needs_sync_review', false);
+            $results['new_posts'][] = $post_title;
         }
-
-        // ✅ Add meta fields for new post
-        update_post_meta($new_post_id, 'auction_sheet_id', $unique_id);
-        update_post_meta($new_post_id, 'auction_status', $data['Status'] ?? '');
-        update_post_meta($new_post_id, 'auctioneer', $data['Auctioneer'] ?? '');
-        update_post_meta($new_post_id, 'auction_city', $data['City'] ?? '');
-        update_post_meta($new_post_id, 'auction_state', $data['State'] ?? '');
-        update_post_meta($new_post_id, 'auction_zip', $data['Zip'] ?? '');
-        update_post_meta($new_post_id, 'auction_deposit', $data['Deposit'] ?? '');
-        update_post_meta($new_post_id, 'auction_date', $data['Date'] ?? '');
-        update_post_meta($new_post_id, 'auction_time', $data['Time'] ?? '');
-        update_post_meta($new_post_id, 'auction_listing_link', $data['Listing Link'] ?? '');
-        update_post_meta($new_post_id, 'auction_terms', $data['Terms'] ?? '');
-        update_post_meta($new_post_id, 'auction_image', $data['Image'] ?? '');
-        update_post_meta($new_post_id, 'auction_last_synced', current_time('mysql'));
-        update_post_meta($new_post_id, 'needs_sync_review', false); // new posts don't need review yet
-
-        error_log("Created new post ID: {$new_post_id} for {$post_title}");
     }
 
-    error_log("Google Sheet sync complete!");
+    return $results;
 }
-
-
