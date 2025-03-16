@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name: Auction Blog Post Importer (Apt & Nimble LLC)
  * Description: Fetches auction listings from Google Sheet CSV and creates blog posts.
@@ -73,7 +74,8 @@ add_action('admin_menu', function () {
     );
 });
 
-function generate_auction_blurb($data) {
+function generate_auction_blurb($data)
+{
     $api_key = defined('OPENAI_API_KEY') ? trim(OPENAI_API_KEY) : '';
 
     if (empty($api_key)) {
@@ -124,19 +126,20 @@ function generate_auction_blurb($data) {
 }
 
 // Main Sync Function
-function sync_auction_data_from_google_sheet() {
+function sync_auction_data_from_google_sheet()
+{
     // Check if another process is already running
     if (get_transient('auction_sync_running')) {
         error_log("⚠️ Another sync process is already running. Skipping this run.");
         return ['error' => 'Another sync process is already running.'];
     }
-    
+
     // Set a transient to indicate we're running (expires after 5 minutes)
     set_transient('auction_sync_running', true, 5 * MINUTE_IN_SECONDS);
-    
+
     // Static variable to track IDs being processed in this run
     static $currently_processing = [];
-    
+
     $results = [
         'new_posts'     => [],
         'review_posts'  => [],
@@ -152,7 +155,7 @@ function sync_auction_data_from_google_sheet() {
         }
 
         $rows_raw = array_map('str_getcsv', explode("\n", $csv));
-        $rows_raw = array_filter($rows_raw, function($row) {
+        $rows_raw = array_filter($rows_raw, function ($row) {
             return count($row) && !empty(trim($row[0]));
         });
 
@@ -187,7 +190,7 @@ function sync_auction_data_from_google_sheet() {
                 continue;
             }
             $seen_ids[$unique_id] = true;
-            
+
             // Check if we're already processing this ID in this run
             if (isset($currently_processing[$unique_id])) {
                 error_log("⚠️ Already processing in this run: {$post_title}");
@@ -217,64 +220,176 @@ function sync_auction_data_from_google_sheet() {
             wp_reset_postdata();
 
             if ($post_id) {
-                error_log("✅ Existing post found: {$post_title} | Post ID: {$post_id}");
-                continue;
-            }
-
-            $blurb = generate_auction_blurb($data);
-
-            $post_content = '';
-            if (!empty($blurb)) {
-                $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
-            }
-
-            $post_content .= '<h2>Auction Details</h2>';
-            $post_content .= '<ul>';
-            $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
-            $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
-            $post_content .= '</ul>';
-
-            if (!empty($data['Image'])) {
-                $post_content .= '<p><img src="' . esc_url($data['Image']) . '" alt="Auction Image" /></p>';
-            }
-
-            $new_post_id = wp_insert_post([
-                'post_title'   => $post_title,
-                'post_content' => $post_content,
-                'post_status'  => 'publish',
-                'post_type'    => 'post',
-            ]);
-
-            if ($new_post_id) {
-                update_post_meta($new_post_id, 'auction_sheet_id', $unique_id);
-                update_post_meta($new_post_id, 'auction_status', $data['Status'] ?? '');
-                update_post_meta($new_post_id, 'auction_date', $data['Date'] ?? '');
-                update_post_meta($new_post_id, 'auction_time', $data['Time'] ?? '');
-
-                if (!empty($blurb)) {
-                    update_post_meta($new_post_id, 'auction_blurb', $blurb);
+                // ✅ Update existing post
+                error_log("Updating post: {$post_title} (ID: {$post_id})");
+                // Custom fields (meta)
+                $custom_fields = get_option('auction_custom_fields', []);
+                foreach ($custom_fields as $csv_label => $meta_key) {
+                    if (isset($data[$csv_label])) {
+                        update_post_meta($post_id, $meta_key, sanitize_text_field($data[$csv_label]));
+                    }
                 }
 
-                error_log("🆕 Created post: {$post_title} | Post ID: {$new_post_id}");
-                $results['new_posts'][] = $post_title;
+                // Blurb
+                $blurb = generate_auction_blurb($data);
+
+                // Post content
+                $post_content = '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
+                $post_content .= '<h2>Auction Details</h2><ul>';
+                $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
+                $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
+
+                foreach ($custom_fields as $csv_label => $meta_key) {
+                    if (isset($data[$csv_label])) {
+                        $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
+                    }
+                }
+
+                $post_content .= '</ul>';
+
+                wp_update_post([
+                    'ID'           => $post_id,
+                    'post_content' => $post_content,
+                    'post_status'  => 'publish',
+                ]);
+
+
+                continue; // skips to next row
             } else {
-                error_log("❌ Failed to create post for: {$post_title}");
+                // ✅ Create new post
+
+                $blurb = generate_auction_blurb($data);
+
+                $post_content = '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
+                $post_content .= '<h2>Auction Details</h2><ul>';
+                $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
+                $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
+                $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
+
+                $custom_fields = get_option('auction_custom_fields', []);
+                foreach ($custom_fields as $csv_label => $meta_key) {
+                    if (isset($data[$csv_label])) {
+                        $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
+                    }
+                }
+
+                $post_content .= '</ul>';
+
+                if (!empty($data['Image'])) {
+                    $post_content .= '<p><img src="' . esc_url($data['Image']) . '" alt="Auction Image" /></p>';
+                }
+
+                $new_post_id = wp_insert_post([
+                    'post_title'   => $post_title,
+                    'post_content' => $post_content,
+                    'post_status'  => 'publish',
+                    'post_type'    => 'post',
+                ]);
+
+                if ($new_post_id) {
+                    update_post_meta($new_post_id, 'auction_sheet_id', $unique_id);
+                    update_post_meta($new_post_id, 'auction_status', $data['Status'] ?? '');
+                    update_post_meta($new_post_id, 'auction_date', $data['Date'] ?? '');
+                    update_post_meta($new_post_id, 'auction_time', $data['Time'] ?? '');
+                    if (!empty($blurb)) {
+                        update_post_meta($new_post_id, 'auction_blurb', $blurb);
+                    }
+
+                    foreach ($custom_fields as $csv_label => $meta_key) {
+                        if (isset($data[$csv_label])) {
+                            update_post_meta($new_post_id, $meta_key, sanitize_text_field($data[$csv_label]));
+                        }
+                    }
+
+                    error_log("🆕 Created post: {$post_title} | Post ID: {$new_post_id}");
+                    $results['new_posts'][] = $post_title;
+                } else {
+                    error_log("❌ Failed to create post for: {$post_title}");
+                }
             }
         }
-        
+
         return $results;
-        
     } finally {
         // Always clear the transient when done, even if an error occurred
         delete_transient('auction_sync_running');
     }
 }
 
+add_action('admin_menu', function () {
+    add_submenu_page(
+        'auction-sync',
+        'Custom Fields',
+        'Custom Fields',
+        'manage_options',
+        'auction-custom-fields',
+        'render_custom_fields_page'
+    );
+});
 
+function render_custom_fields_page()
+{
+    if (!current_user_can('manage_options')) return;
+
+    // Get existing mappings
+    $field_mappings = get_option('auction_custom_fields', []);
+
+    // Handle form submit
+    if (isset($_POST['save_fields'])) {
+        $labels = array_map('sanitize_text_field', $_POST['column_label'] ?? []);
+        $meta_keys = array_map('sanitize_text_field', $_POST['meta_key'] ?? []);
+
+        $new_mappings = [];
+        foreach ($labels as $index => $label) {
+            if (!empty($label) && !empty($meta_keys[$index])) {
+                $new_mappings[$label] = $meta_keys[$index];
+            }
+        }
+
+        update_option('auction_custom_fields', $new_mappings);
+        $field_mappings = $new_mappings;
+
+        echo '<div class="updated"><p>Fields updated!</p></div>';
+    }
+
+    echo '<div class="wrap">';
+    echo '<h1>Custom Field Mapping</h1>';
+    echo '<form method="post">';
+    echo '<table class="form-table"><tr><th>CSV Column Label</th><th>Post Meta Key</th></tr>';
+
+    // Render existing fields
+    if (!empty($field_mappings)) {
+        foreach ($field_mappings as $label => $meta_key) {
+            echo '<tr>';
+            echo '<td><input type="text" name="column_label[]" value="' . esc_attr($label) . '"></td>';
+            echo '<td><input type="text" name="meta_key[]" value="' . esc_attr($meta_key) . '"></td>';
+            echo '</tr>';
+        }
+    }
+
+    // Blank row for new entry
+    echo '<tr>';
+    echo '<td><input type="text" name="column_label[]" value=""></td>';
+    echo '<td><input type="text" name="meta_key[]" value=""></td>';
+    echo '</tr>';
+
+    echo '</table>';
+
+    submit_button('Save Fields', 'primary', 'save_fields');
+
+    echo '</form>';
+    echo '</div>';
+}
