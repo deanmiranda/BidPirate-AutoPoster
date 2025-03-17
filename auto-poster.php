@@ -24,6 +24,8 @@ add_action('wp', function () {
 // Allow WP user to update URL field
 add_action('admin_init', function () {
     register_setting('auction_sync_settings', 'auction_google_sheet_url');
+    register_setting('auction_sync_settings', 'auction_enable_gpt_blurb');
+
 });
 
 // Hook Cron Event
@@ -38,16 +40,27 @@ add_action('admin_menu', function () {
         'auction-sync',
         function () {
             echo '<h2>Auction Import Settings</h2>';
+
             echo '<form method="post" action="options.php">';
             settings_fields('auction_sync_settings');
             echo '<table class="form-table">';
-            echo '<tr><th scope="row">Google Sheet CSV URL</th><td>';
-            echo '<input type="text" name="auction_google_sheet_url" value="' . esc_attr(get_option('auction_google_sheet_url', '')) . '" size="80" />';
-            echo '</td></tr>';
+            
+                // Custom URL Field
+                echo '<tr><th scope="row">Google Sheet CSV URL</th><td>';
+                echo '<input type="text" name="auction_google_sheet_url" value="' . esc_attr(get_option('auction_google_sheet_url', '')) . '" size="80" />';
+                echo '</td></tr>';
+                
+                // Toggle GPT Blurb
+                echo '<tr><th scope="row">Enable GPT Blurb</th><td>';
+                echo '<input type="checkbox" name="auction_enable_gpt_blurb" value="1" ' . checked(1, get_option('auction_enable_gpt_blurb', 1), false) . ' />';
+                echo ' Generate AI-powered blurbs';
+                echo '</td></tr>';
+
             echo '</table>';
             submit_button('Save Settings');
             echo '</form>';
 
+            // Sync Button
             echo '<form method="post"><button name="sync" class="button-primary">Sync & Create/Update Blog Posts Now</button></form>';
 
             if (isset($_POST['sync'])) {
@@ -264,8 +277,13 @@ function sync_auction_data_from_google_sheet()
                 }
 
                 // Blurb
-                $blurb = generate_auction_blurb($data);
-
+                $blurb = '';
+                if (get_option('auction_enable_gpt_blurb', 1)) {
+                    $blurb = generate_auction_blurb($data);
+                } else {
+                    $blurb = 'No GPT blurb generated.';
+                }
+                
                 // Post content
                 $post_content = '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
                 $post_content .= '<h2>Auction Details</h2><ul>';
