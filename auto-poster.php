@@ -155,8 +155,8 @@ function generate_auction_blurb($data)
 }
 
 // Main Sync Function
-function sync_auction_data_from_google_sheet()
-{
+
+function sync_auction_data_from_google_sheet() {
     // Check if another process is already running
     if (get_transient('auction_sync_running')) {
         error_log("⚠️ Another sync process is already running. Skipping this run.");
@@ -166,18 +166,14 @@ function sync_auction_data_from_google_sheet()
     // Set a transient to indicate we're running (expires after 5 minutes)
     set_transient('auction_sync_running', true, 5 * MINUTE_IN_SECONDS);
 
-    // Static variable to track IDs being processed in this run
     static $currently_processing = [];
 
     $results = [
-        'new_posts'     => [],
-        'review_posts'  => [],
+        'new_posts'    => [],
+        'review_posts' => [],
     ];
 
     try {
-        // TEST CSL URL Link
-        // $csv_url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSF_mV69DPo8Dl9JMjOm8w2WfTDRLIwHdDhymxQxHiJEYEZJI058qEOApbz9zvLB9NH7ReRwmXD4L1Z/pub?output=csv';
-
         $csv_url = get_option('auction_google_sheet_url', '');
 
         if (empty($csv_url)) {
@@ -185,42 +181,40 @@ function sync_auction_data_from_google_sheet()
             return ['error' => 'Google Sheet URL is not set. Please configure it in Auction Sync settings.'];
         }
 
-        $csv = file_get_contents($csv_url);
-
-        if (!$csv) {
-            error_log('❌ Failed to fetch Google Sheet CSV!');
-            return ['error' => 'Failed to fetch CSV from Google Sheets.'];
+        $rows_raw = [];
+        if (($handle = fopen($csv_url, 'r')) !== false) {
+            while (($row = fgetcsv($handle)) !== false) {
+                // Skip empty or invalid lines
+                if (empty(array_filter($row))) {
+                    continue;
+                }
+                $rows_raw[] = array_map('trim', $row);
+            }
+            fclose($handle);
         }
-
-        $rows_raw = array_map('str_getcsv', explode("\n", $csv));
-        $rows_raw = array_filter($rows_raw, function ($row) {
-            return count($row) && !empty(trim($row[0]));
-        });
 
         if (empty($rows_raw) || count($rows_raw) < 2) {
             error_log('❌ No usable data found in the Google Sheet.');
             return ['error' => 'No usable data found in the Google Sheet.'];
         }
 
+        // Extract headers
         $header = array_map('trim', array_shift($rows_raw));
         $seen_ids = [];
 
         foreach ($rows_raw as $row_index => $row) {
-
-   
+            // Ensure row matches header length
             if (count($row) !== count($header)) {
-                if (count($row) < count($header)) {
-                    error_log("⚠️ Row {$row_index} has fewer columns. Filling missing values.");
-                } else {
-                    error_log("⚠️ Row {$row_index} has extra columns. Trimming excess values.");
-                }
-            
+                error_log("⚠️ Row {$row_index} misaligned. Expected " . count($header) . ", got " . count($row));
                 $row = array_pad($row, count($header), '');
                 $row = array_slice($row, 0, count($header));
             }
-            
+
             $data = array_combine($header, $row);
-            
+            if (!$data) {
+                error_log("❌ array_combine failed on row {$row_index}");
+                continue;
+            }
 
             $post_title_raw = $data['Address'] ?? '';
             $post_title = trim(sanitize_text_field($post_title_raw));
@@ -235,20 +229,22 @@ function sync_auction_data_from_google_sheet()
                 error_log("⚠️ Duplicate in CSV: {$post_title} already processed.");
                 continue;
             }
+
             $seen_ids[$unique_id] = true;
 
-            // Check if we're already processing this ID in this run
             if (isset($currently_processing[$unique_id])) {
                 error_log("⚠️ Already processing in this run: {$post_title}");
                 continue;
             }
+
             $currently_processing[$unique_id] = true;
 
             error_log("🔍 Processing: {$post_title} | Unique ID: {$unique_id}");
 
+            // Query for existing post
             $query = new WP_Query([
                 'post_type'      => 'post',
-                'post_status'    => ['publish', 'pending', 'draft'], // Check all statuses
+                'post_status'    => ['publish', 'pending', 'draft'],
                 'meta_query'     => [
                     [
                         'key'     => 'auction_sheet_id',
@@ -258,55 +254,57 @@ function sync_auction_data_from_google_sheet()
                 ],
                 'posts_per_page' => 1,
                 'fields'         => 'ids',
-                'cache_results'  => false, // Don't cache to ensure fresh results
-                'no_found_rows'  => true,  // Performance optimization
+                'cache_results'  => false,
+                'no_found_rows'  => true,
             ]);
 
             $post_id = !empty($query->posts) ? $query->posts[0] : null;
             wp_reset_postdata();
 
+            $custom_fields = get_option('auction_custom_fields', []);
+            $blurb = '';
+
+            if (get_option('auction_enable_gpt_blurb')) {
+                $blurb = generate_auction_blurb($data);
+            }
+
+            $post_content = '';
+
+            if (!empty($blurb)) {
+                $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
+            }
+
+            $post_content .= '<h2>Auction Details</h2><ul>';
+            $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
+            $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
+            $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
+
+            foreach ($custom_fields as $csv_label => $meta_key) {
+                if (isset($data[$csv_label])) {
+                    $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
+                }
+            }
+
+            $post_content .= '</ul>';
+
+            if (!empty($data['Image'])) {
+                $post_content .= '<p><img src="' . esc_url($data['Image']) . '" alt="Auction Image" /></p>';
+            }
+
             if ($post_id) {
-                // ✅ Update existing post
-                error_log("Updating post: {$post_title} (ID: {$post_id})");
-                // Custom fields (meta)
-                $custom_fields = get_option('auction_custom_fields', []);
+                error_log("✅ Updating post: {$post_title} (ID: {$post_id})");
+
                 foreach ($custom_fields as $csv_label => $meta_key) {
                     if (isset($data[$csv_label])) {
                         update_post_meta($post_id, $meta_key, sanitize_text_field($data[$csv_label]));
                     }
                 }
-
-                // Blurb
-                $blurb = '';
-                if (get_option('auction_enable_gpt_blurb')) {
-                    $blurb = generate_auction_blurb($data);
-                }
-                
-                $post_content = '';
-
-                if (!empty($blurb)) {
-                    $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
-                }
-                
-                // Post content
-                $post_content .= '<h2>Auction Details</h2><ul>';
-                $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
-                $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
-
-                foreach ($custom_fields as $csv_label => $meta_key) {
-                    if (isset($data[$csv_label])) {
-                        $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
-                    }
-                }
-
-                $post_content .= '</ul>';
 
                 wp_update_post([
                     'ID'           => $post_id,
@@ -314,46 +312,11 @@ function sync_auction_data_from_google_sheet()
                     'post_status'  => 'publish',
                 ]);
 
-
-                continue; // skips to next row
+                $results['review_posts'][] = [
+                    'title'   => $post_title,
+                    'changes' => ['Post updated.'],
+                ];
             } else {
-                // ✅ Create new post
-
-                $blurb = '';
-                if (get_option('auction_enable_gpt_blurb')) {
-                    $blurb = generate_auction_blurb($data);
-                }
-                
-                $post_content = '';
-
-                if (!empty($blurb)) {
-                    $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
-                }
-                
-                $post_content .= '<h2>Auction Details</h2><ul>';
-                $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
-                $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
-                $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
-
-                $custom_fields = get_option('auction_custom_fields', []);
-                foreach ($custom_fields as $csv_label => $meta_key) {
-                    if (isset($data[$csv_label])) {
-                        $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
-                    }
-                }
-
-                $post_content .= '</ul>';
-
-                if (!empty($data['Image'])) {
-                    $post_content .= '<p><img src="' . esc_url($data['Image']) . '" alt="Auction Image" /></p>';
-                }
-
                 $new_post_id = wp_insert_post([
                     'post_title'   => $post_title,
                     'post_content' => $post_content,
@@ -366,6 +329,7 @@ function sync_auction_data_from_google_sheet()
                     update_post_meta($new_post_id, 'auction_status', $data['Status'] ?? '');
                     update_post_meta($new_post_id, 'auction_date', $data['Date'] ?? '');
                     update_post_meta($new_post_id, 'auction_time', $data['Time'] ?? '');
+
                     if (!empty($blurb)) {
                         update_post_meta($new_post_id, 'auction_blurb', $blurb);
                     }
@@ -385,11 +349,14 @@ function sync_auction_data_from_google_sheet()
         }
 
         return $results;
+    } catch (Exception $e) {
+        error_log("❌ Exception during sync: " . $e->getMessage());
+        return ['error' => 'Unexpected error: ' . $e->getMessage()];
     } finally {
-        // Always clear the transient when done, even if an error occurred
         delete_transient('auction_sync_running');
     }
 }
+
 
 add_action('admin_menu', function () {
     add_submenu_page(
@@ -406,8 +373,37 @@ function render_custom_fields_page()
 {
     if (!current_user_can('manage_options')) return;
 
-    // Get existing mappings
+    // Load existing mappings
     $field_mappings = get_option('auction_custom_fields', []);
+
+    // If no mappings exist, try to auto-populate from CSV headers
+    if (empty($field_mappings)) {
+        $csv_url = get_option('auction_google_sheet_url', '');
+
+        if (!empty($csv_url)) {
+            $csv = file_get_contents($csv_url);
+            
+            if ($csv) {
+                $rows_raw = array_map('str_getcsv', explode("\n", $csv));
+                $rows_raw = array_filter($rows_raw, function ($row) {
+                    return count($row) && !empty(trim($row[0]));
+                });
+
+                if (!empty($rows_raw) && count($rows_raw) >= 2) {
+                    $header = array_map('trim', array_shift($rows_raw));
+
+                    // Auto-map headers to meta keys (sanitize keys)
+                    foreach ($header as $label) {
+                        $meta_key = sanitize_key(str_replace(' ', '_', strtolower($label)));
+                        $field_mappings[$label] = $meta_key;
+                    }
+
+                    update_option('auction_custom_fields', $field_mappings);
+                }
+            }
+        }
+    }
+
 
     // Handle form submit
     if (isset($_POST['save_fields'])) {
