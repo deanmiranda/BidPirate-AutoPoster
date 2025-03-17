@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Auction Blog Post Importer (Apt & Nimble LLC)
  * Description: Fetches auction listings from Google Sheet CSV and creates blog posts.
- * Version: 1.2
+ * Version: 1.3
  * Author: Dean Miranda
  */
 
@@ -278,14 +278,17 @@ function sync_auction_data_from_google_sheet()
 
                 // Blurb
                 $blurb = '';
-                if (get_option('auction_enable_gpt_blurb', 1)) {
+                if (get_option('auction_enable_gpt_blurb')) {
                     $blurb = generate_auction_blurb($data);
-                } else {
-                    $blurb = 'No GPT blurb generated.';
+                }
+                
+                $post_content = '';
+
+                if (!empty($blurb)) {
+                    $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
                 }
                 
                 // Post content
-                $post_content = '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
                 $post_content .= '<h2>Auction Details</h2><ul>';
                 $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
                 $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
@@ -316,9 +319,17 @@ function sync_auction_data_from_google_sheet()
             } else {
                 // ✅ Create new post
 
-                $blurb = generate_auction_blurb($data);
+                $blurb = '';
+                if (get_option('auction_enable_gpt_blurb')) {
+                    $blurb = generate_auction_blurb($data);
+                }
+                
+                $post_content = '';
 
-                $post_content = '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
+                if (!empty($blurb)) {
+                    $post_content .= '<p><strong>Property Highlight:</strong> ' . esc_html($blurb) . '</p><hr>';
+                }
+                
                 $post_content .= '<h2>Auction Details</h2><ul>';
                 $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
                 $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
