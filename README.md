@@ -1,4 +1,3 @@
-
 # 📦 Auction Blog Post Importer (Apt & Nimble LLC)
 
 **Version:** 1.1  
@@ -23,6 +22,7 @@ The plugin ensures:
 - **Duplicate prevention** based on a unique post identifier  
 - **Review flagging** if auction status differs between sheet and WordPress  
 - **Custom meta fields** stored for each auction  
+- **Optional GPT-powered blurbs** (requires your OpenAI API key)
 
 ---
 
@@ -32,13 +32,14 @@ The plugin ensures:
 3. If no match is found, a **new blog post** is created  
 4. If a post **exists**, and the `Status` column has changed, the post is **flagged for review**  
 5. No automatic updates to existing posts are made (to protect manual edits by users)  
+6. Optionally, **AI-powered listing blurbs** can be generated if you enable GPT blurbs and provide your OpenAI API key.
 
 ---
 
 ## 🗂️ Google Sheet Requirements  
 ### 1. The Google Sheet **must be published as a CSV**
 - Go to **File > Share > Publish to web > CSV**
-- Use the generated **CSV link** in the plugin settings (`$csv_url`)
+- Use the generated **CSV link** in the plugin settings
 
 ### 2. Required Columns (headers):  
 | Column Name | Description                | Notes                     |
@@ -82,6 +83,14 @@ The plugin ensures:
 
 ---
 
+## 🤖 GPT-Powered Blurbs  
+- You can enable **GPT blurbs** for property descriptions.
+- To use this feature, you **must** enter your **own OpenAI API key** in the plugin settings.
+- Without a valid API key, blurbs will be disabled by default.
+- Blurbs are generated automatically during sync if the feature is enabled.
+
+---
+
 ## ⏱️ Cron Details  
 - Runs hourly by default  
 - Uses `wp_schedule_event()` on `'auction_import_cron'`  
@@ -111,8 +120,9 @@ The plugin ensures:
 2. Zip the folder  
 3. Upload the zip file via **WordPress Admin > Plugins > Add New > Upload Plugin**  
 4. Activate  
-5. Add your Google Sheet CSV URL to the plugin file (`$csv_url` variable)  
-6. Done!  
+5. Add your Google Sheet CSV URL in the plugin settings  
+6. (Optional) Enable GPT blurbs and add your OpenAI API key  
+7. Done!  
 
 ---
 
