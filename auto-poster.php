@@ -21,6 +21,11 @@ add_action('wp', function () {
     }
 });
 
+// Allow WP user to update URL field
+add_action('admin_init', function () {
+    register_setting('auction_sync_settings', 'auction_google_sheet_url');
+});
+
 // Hook Cron Event
 add_action('auction_import_cron', 'sync_auction_data_from_google_sheet');
 
@@ -32,6 +37,17 @@ add_action('admin_menu', function () {
         'manage_options',
         'auction-sync',
         function () {
+            echo '<h2>Auction Import Settings</h2>';
+            echo '<form method="post" action="options.php">';
+            settings_fields('auction_sync_settings');
+            echo '<table class="form-table">';
+            echo '<tr><th scope="row">Google Sheet CSV URL</th><td>';
+            echo '<input type="text" name="auction_google_sheet_url" value="' . esc_attr(get_option('auction_google_sheet_url', '')) . '" size="80" />';
+            echo '</td></tr>';
+            echo '</table>';
+            submit_button('Save Settings');
+            echo '</form>';
+
             echo '<form method="post"><button name="sync" class="button-primary">Sync & Create/Update Blog Posts Now</button></form>';
 
             if (isset($_POST['sync'])) {
@@ -146,7 +162,16 @@ function sync_auction_data_from_google_sheet()
     ];
 
     try {
-        $csv_url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSF_mV69DPo8Dl9JMjOm8w2WfTDRLIwHdDhymxQxHiJEYEZJI058qEOApbz9zvLB9NH7ReRwmXD4L1Z/pub?output=csv';
+        // TEST CSL URL Link
+        // $csv_url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSF_mV69DPo8Dl9JMjOm8w2WfTDRLIwHdDhymxQxHiJEYEZJI058qEOApbz9zvLB9NH7ReRwmXD4L1Z/pub?output=csv';
+
+        $csv_url = get_option('auction_google_sheet_url', '');
+
+        if (empty($csv_url)) {
+            error_log('❌ Google Sheet URL is not set.');
+            return ['error' => 'Google Sheet URL is not set. Please configure it in Auction Sync settings.'];
+        }
+
         $csv = file_get_contents($csv_url);
 
         if (!$csv) {
@@ -169,12 +194,20 @@ function sync_auction_data_from_google_sheet()
 
         foreach ($rows_raw as $row_index => $row) {
 
+   
             if (count($row) !== count($header)) {
-                error_log("❌ Skipping row {$row_index}: column mismatch.");
-                continue;
+                if (count($row) < count($header)) {
+                    error_log("⚠️ Row {$row_index} has fewer columns. Filling missing values.");
+                } else {
+                    error_log("⚠️ Row {$row_index} has extra columns. Trimming excess values.");
+                }
+            
+                $row = array_pad($row, count($header), '');
+                $row = array_slice($row, 0, count($header));
             }
-
+            
             $data = array_combine($header, $row);
+            
 
             $post_title_raw = $data['Address'] ?? '';
             $post_title = trim(sanitize_text_field($post_title_raw));
