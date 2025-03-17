@@ -25,7 +25,7 @@ add_action('wp', function () {
 add_action('admin_init', function () {
     register_setting('auction_sync_settings', 'auction_google_sheet_url');
     register_setting('auction_sync_settings', 'auction_enable_gpt_blurb');
-
+    register_setting('auction_sync_settings', 'auction_openai_api_key');
 });
 
 // Hook Cron Event
@@ -52,9 +52,16 @@ add_action('admin_menu', function () {
                 
                 // Toggle GPT Blurb
                 echo '<tr><th scope="row">Enable GPT Blurb</th><td>';
-                echo '<input type="checkbox" name="auction_enable_gpt_blurb" value="1" ' . checked(1, get_option('auction_enable_gpt_blurb', 1), false) . ' />';
+                echo '<input type="checkbox" name="auction_enable_gpt_blurb" value="1" ' . checked(1, get_option('auction_enable_gpt_blurb', 0), false) . ' />';
                 echo ' Generate AI-powered blurbs';
                 echo '</td></tr>';
+
+                // OpenAI API Key Input
+                echo '<tr><th scope="row">OpenAI API Key</th><td>';
+                echo '<input type="text" name="auction_openai_api_key" value="' . esc_attr(get_option('auction_openai_api_key', '')) . '" size="80" />';
+                echo '<p class="description">Enter your OpenAI API Key here. Leave blank to disable GPT blurbs.</p>';
+                echo '</td></tr>';
+
 
             echo '</table>';
             submit_button('Save Settings');
@@ -105,11 +112,11 @@ add_action('admin_menu', function () {
 
 function generate_auction_blurb($data)
 {
-    $api_key = defined('OPENAI_API_KEY') ? trim(OPENAI_API_KEY) : '';
+    $api_key = trim(get_option('auction_openai_api_key', ''));
 
     if (empty($api_key)) {
-        error_log('OpenAI API key missing.');
-        return '';
+        error_log('OpenAI API key missing or not set.');
+        return ''; // Disable blurb generation if no API key.
     }
 
     $prompt = "Write a professional, engaging real estate auction listing blurb. Make it under 100 words.\n\n";
@@ -157,6 +164,7 @@ function generate_auction_blurb($data)
 // Main Sync Function
 
 function sync_auction_data_from_google_sheet() {
+
     // Check if another process is already running
     if (get_transient('auction_sync_running')) {
         error_log("⚠️ Another sync process is already running. Skipping this run.");
@@ -264,9 +272,10 @@ function sync_auction_data_from_google_sheet() {
             $custom_fields = get_option('auction_custom_fields', []);
             $blurb = '';
 
-            if (get_option('auction_enable_gpt_blurb')) {
+            if (get_option('auction_enable_gpt_blurb') && !empty(get_option('auction_openai_api_key'))) {
                 $blurb = generate_auction_blurb($data);
             }
+            
 
             $post_content = '';
 
@@ -275,21 +284,13 @@ function sync_auction_data_from_google_sheet() {
             }
 
             $post_content .= '<h2>Auction Details</h2><ul>';
-            $post_content .= '<li><strong>Status:</strong> ' . esc_html($data['Status'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Auctioneer:</strong> ' . esc_html($data['Auctioneer'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>City:</strong> ' . esc_html($data['City'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>State:</strong> ' . esc_html($data['State'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Zip:</strong> ' . esc_html($data['Zip'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Date:</strong> ' . esc_html($data['Date'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Time:</strong> ' . esc_html($data['Time'] ?? 'N/A') . '</li>';
-            $post_content .= '<li><strong>Listing Link:</strong> <a href="' . esc_url($data['Listing Link'] ?? '#') . '">View Listing</a></li>';
-            $post_content .= '<li><strong>Terms:</strong> ' . esc_html($data['Terms'] ?? 'N/A') . '</li>';
-
-            foreach ($custom_fields as $csv_label => $meta_key) {
-                if (isset($data[$csv_label])) {
-                    $post_content .= '<li><strong>' . esc_html($csv_label) . ':</strong> ' . esc_html($data[$csv_label]) . '</li>';
+    
+            foreach ($data as $label => $value) {
+                if (!empty($label)) {
+                    $post_content .= '<li><strong>' . esc_html($label) . ':</strong> ' . esc_html($value) . '</li>';
                 }
             }
+            
 
             $post_content .= '</ul>';
 
@@ -298,24 +299,72 @@ function sync_auction_data_from_google_sheet() {
             }
 
             if ($post_id) {
-                error_log("✅ Updating post: {$post_title} (ID: {$post_id})");
+                // Fetch current post data
+                $current_post = get_post($post_id);
+                $existing_content = $current_post->post_content;
 
-                foreach ($custom_fields as $csv_label => $meta_key) {
-                    if (isset($data[$csv_label])) {
-                        update_post_meta($post_id, $meta_key, sanitize_text_field($data[$csv_label]));
-                    }
+                // Fetch current meta values
+                $current_status = get_post_meta($post_id, 'auction_status', true);
+                $current_date   = get_post_meta($post_id, 'auction_date', true);
+                $current_time   = get_post_meta($post_id, 'auction_time', true);
+                $current_blurb  = get_post_meta($post_id, 'auction_blurb', true);
+
+                // Flags to track changes
+                $needs_update = false;
+                $changes = [];
+
+                // Check post content
+                if (trim($existing_content) !== trim($post_content)) {
+                    $needs_update = true;
+                    $changes[] = 'Post content changed.';
                 }
 
-                wp_update_post([
-                    'ID'           => $post_id,
-                    'post_content' => $post_content,
-                    'post_status'  => 'publish',
-                ]);
+                // Check meta fields
+                if ($current_status !== ($data['Status'] ?? '')) {
+                    $needs_update = true;
+                    $changes[] = 'Status changed.';
+                }
 
-                $results['review_posts'][] = [
-                    'title'   => $post_title,
-                    'changes' => ['Post updated.'],
-                ];
+                if ($current_date !== ($data['Date'] ?? '')) {
+                    $needs_update = true;
+                    $changes[] = 'Date changed.';
+                }
+
+                if ($current_time !== ($data['Time'] ?? '')) {
+                    $needs_update = true;
+                    $changes[] = 'Time changed.';
+                }
+
+                if ($current_blurb !== $blurb) {
+                    $needs_update = true;
+                    $changes[] = 'Blurb changed.';
+                }
+
+                if ($needs_update) {
+                    error_log("✅ Updating post: {$post_title} (ID: {$post_id})");
+
+                    wp_update_post([
+                        'ID'           => $post_id,
+                        'post_content' => $post_content,
+                        'post_status'  => 'publish',
+                    ]);
+
+                    update_post_meta($post_id, 'auction_sheet_id', $unique_id);
+                    update_post_meta($post_id, 'auction_status', $data['Status'] ?? '');
+                    update_post_meta($post_id, 'auction_date', $data['Date'] ?? '');
+                    update_post_meta($post_id, 'auction_time', $data['Time'] ?? '');
+                    if (!empty($blurb)) {
+                        update_post_meta($post_id, 'auction_blurb', $blurb);
+                    }
+
+                    $results['review_posts'][] = [
+                        'title'   => $post_title,
+                        'changes' => $changes,
+                    ];
+                } else {
+                    error_log("✅ No changes detected for post: {$post_title} (ID: {$post_id})");
+                }
+
             } else {
                 $new_post_id = wp_insert_post([
                     'post_title'   => $post_title,
