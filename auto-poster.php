@@ -270,10 +270,17 @@ function sync_auction_data_from_google_sheet() {
             wp_reset_postdata();
 
             $custom_fields = get_option('auction_custom_fields', []);
+
             $blurb = '';
 
-            if (get_option('auction_enable_gpt_blurb') && !empty(get_option('auction_openai_api_key'))) {
+            // Only generate the blurb if it's a NEW post
+            if (!$post_id && get_option('auction_enable_gpt_blurb') && !empty(get_option('auction_openai_api_key'))) {
                 $blurb = generate_auction_blurb($data);
+            }
+            
+            // If updating an existing post, fetch the current blurb from post meta
+            if ($post_id) {
+                $blurb = get_post_meta($post_id, 'auction_blurb', true);
             }
             
 
@@ -333,11 +340,6 @@ function sync_auction_data_from_google_sheet() {
                 if ($current_time !== ($data['Time'] ?? '')) {
                     $needs_update = true;
                     $changes[] = 'Time changed.';
-                }
-
-                if ($current_blurb !== $blurb) {
-                    $needs_update = true;
-                    $changes[] = 'Blurb changed.';
                 }
 
                 if ($needs_update) {
