@@ -7,19 +7,6 @@
  * Author: Dean Miranda
  */
 
-// Run on Cron
-add_action('init', function () {
-    if (defined('DOING_CRON') && DOING_CRON) {
-        sync_auction_data_from_google_sheet();
-    }
-});
-
-// Schedule Cron Event if Not Already
-add_action('wp', function () {
-    if (!wp_next_scheduled('auction_import_cron')) {
-        wp_schedule_event(time(), 'hourly', 'auction_import_cron');
-    }
-});
 
 // Allow WP user to update URL field
 add_action('admin_init', function () {
@@ -27,9 +14,6 @@ add_action('admin_init', function () {
     register_setting('auction_sync_settings', 'auction_enable_gpt_blurb');
     register_setting('auction_sync_settings', 'auction_openai_api_key');
 });
-
-// Hook Cron Event
-add_action('auction_import_cron', 'sync_auction_data_from_google_sheet');
 
 // Admin Page & Button
 add_action('admin_menu', function () {
